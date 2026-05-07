@@ -1,48 +1,70 @@
-eleStaff Export Automation for CRVTS
+# TeleStaff Export Automation for CRVTS
 
-This script replaces the old manual Excel cleanup process for the CRVTS TeleStaff export. It takes two exports from TeleStaff, joins them together, builds the fields CRVTS needs, and writes out a finished TS_EXP.xlsx file ready to drop into SharePoint for the CRVTS Power Query. Credit to Paul Clark for getting the original spreadsheet process started.
+Replaces the 40-step manual Excel process documented in "TeleStaff Export Procedures for the Vacancy Tracking System."
 
-Overview
+Takes two TeleStaff downloads (Assignment Report + People CSV), joins and transforms them, and outputs `TS EXP.xlsx` ready to drop into SharePoint for the CRVTS Power Query.
 
-The script takes an Assignment Report and a People export from TeleStaff, reads both files, matches them together, derives a few missing fields, and writes the finished workbook to your Downloads folder. The goal is to replace the old multi step Excel cleanup with one run of the script.
+## Requirements
 
-Required files
-
-You need two exports from TeleStaff: the Assignment Report, which is the main staffing file and includes the current assignment rows the script builds from, and the People export, which provides the extra employee data used to fill in Promoted and IDPH Status; the script matches File from the Assignment Report to Payroll ID from the People export, and while the Assignment Report usually comes out as an .xls file that is really XML underneath, the People export can be .csv, .xlsx, or .xls.
-
-Requirements
-
-The script requires Python 3 along with pandas and openpyxl.
-
-Install
+```
 pip install pandas openpyxl
-Run
+```
+
+Python 3.8+. No internet connection required at runtime.
+
+## Getting the Source Files from TeleStaff
+
+### Assignment Report
+
+1. Switch **Institution** to **None**
+2. Go to **Reports** > **Assignment Report**
+3. Download with default options — select **Assignment Report (worksheet)**
+
+### People CSV
+
+1. Switch **Institution** back to your institution
+2. Go to **People** and **let it fully load** (exporting before load completes gives you an empty CSV)
+3. Click the **gear icon** > **Export to CSV** (`people.csv`)
+
+## Usage
+
+Run the script:
+
+```
 python ts_export.py
+```
 
-When it runs, it will first ask you to choose the TeleStaff Assignment Report and then the TeleStaff People export. If you skip the People export, the script will still finish, but Promoted will stay blank and IDPH Status will default to NONE.
+Three file dialogs will appear in sequence:
 
-What the script builds
+1. **Select the Assignment Report** — the `.xls` file from TeleStaff (it's actually XML, the script handles this)
+2. **Select the People CSV** — the `.csv` export from TeleStaff People. You can cancel this dialog if you don't have it; Promoted and IDPH Status columns will just be empty.
+3. **Save As** — choose where to save `TS EXP.xlsx`. Defaults to your Downloads folder with the filename pre-filled.
 
-The Assignment Report is the base file. From that, the script reads the assignment rows and keeps the fields CRVTS needs, including things like institution, region, station, unit, person, employee ID, file, shift, Daley, from, and rank. It then derives Name by stripping the parenthetical assignment code out of the Person field, derives TS Assignment from the value inside those parentheses, and builds PLT by using Daley if it exists, otherwise checking Shift for an EMS platoon value, and defaulting to 5 if neither applies.
+After saving, a validation summary prints to the console so you can eyeball record counts, IDPH match rates, and sample rows before uploading.
 
-The People export is used to enrich the base data. It provides the Promoted value and the information used to determine IDPH Status. The script checks the People file for Specialty first and falls back to Name if needed. The possible IDPH results are PAR, EMT, EMT (PM Drop), and NONE.
+## What It Does
 
-Output
+The script parses the Assignment Report XML (Microsoft SpreadsheetML disguised as `.xls`), handles the `MergeAcross=1` quirk on the Institution column, and derives several columns that the manual process required formulas or Power Query steps for:
 
-The finished output file is TS_EXP.xlsx, saved to your Downloads folder. The workbook contains four sheets. TS Assign holds the base assignment data plus the derived columns. TS EXP is the main output sheet read by the CRVTS Power Query. TS Promoted keeps the full People export for reference. IDPH Lic is a simple two column reference sheet containing file or payroll ID and IDPH status, with no headers.
+- **Name** — Person field with the parenthetical unit code stripped out
+- **TS Assignment** — the unit code extracted from the parenthetical
+- **PLT** — Daley value if present, otherwise EMS platoon number from the shift name, otherwise defaults to 5
+- **Promoted** — date pulled from the People CSV via Payroll ID join
+- **IDPH Status** — license type (PAR, EMT, EMT (PM Drop), or NONE) derived from the People CSV Specialty field, with a fallback parse of the Name field
 
-Validation
+## Output Workbook
 
-At the end of the run, the script prints a summary in the terminal so you can sanity check the output before uploading it. That summary includes total row count, IDPH status counts, PLT counts, rank fill counts, promoted fill counts, and a few sample rows. That makes it easier to catch a bad export, shifted columns, or a mismatched People file before the workbook gets uploaded.
+`TS EXP.xlsx` contains four sheets:
 
-Typical workflow
+| Sheet | Purpose |
+|---|---|
+| **TS Assign** | Base data with "Text Between Delimiters" column (replaces the Power Query extraction step) |
+| **TS EXP** | The main sheet CRVTS Power Query reads from |
+| **TS Promoted** | Full People export preserved for reference |
+| **IDPH Lic** | Payroll ID + license type pairs (no headers), for reference |
 
-The normal process is to export the Assignment Report from TeleStaff, export the People file from TeleStaff, run ts_export.py, select both files when prompted, let the script build TS_EXP.xlsx, upload that file to SharePoint, and then refresh the CRVTS Power Query.
+All data sheets are formatted as Excel tables.
 
-Notes
+## After Running
 
-Set institution to none. The script assumes the Assignment Report contains a header row beginning with Institution and Region, and it assumes that File from the Assignment Report matches Payroll ID from the People export. If something breaks, the first things to check are whether the wrong TeleStaff export was selected, whether the header row changed, whether the People export is missing Payroll ID, whether the Assignment Report columns shifted, or whether TeleStaff changed the export format.
-
-Libraries used
-
-The script uses tkinter for the file picker, xml.etree.ElementTree for reading the TeleStaff XML export, pandas for joins and transformations, and openpyxl for writing the final workbook.
+Drag `TS EXP.xlsx` to the SharePoint location and refresh the CRVTS Power Query.
