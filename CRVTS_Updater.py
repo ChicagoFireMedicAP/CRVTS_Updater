@@ -8,7 +8,12 @@ Takes two TeleStaff downloads (Assignment Report + People CSV),
 joins and transforms them, and outputs TS EXP.xlsx ready to drop
 into SharePoint for the CRVTS Power Query.
 
-Requires: pip install pandas openpyxl requests
+Quick note to get these files, switch instituition to none, then go to reports, assignment report, download (with default options) Assignment Report (worksheet)
+switch instituition back to instituition, go to people (let it load exporting before load gives you empty csv) hit the gear button then export to csv (people.csv)
+
+Drop the TS EXP into the correct folder on sharepoint, then refresh data connections in the CRVTS file
+
+Requires: install pandas openpyxl requests
 """
 
 import re
@@ -24,7 +29,7 @@ try:
     from openpyxl.worksheet.table import Table, TableStyleInfo
     from openpyxl.utils import get_column_letter
 except ImportError:
-    print("Missing dependencies. Run:\n  pip install pandas openpyxl")
+    print("Missing dependencies.  install pandas  and openpyxl")
     sys.exit(1)
 
 
