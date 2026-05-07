@@ -3,13 +3,12 @@ ts_export.py — TeleStaff Export Automation for CRVTS
 
 Replaces the 40-step manual Excel process documented in
 "TeleStaff Export Procedures for the Vacancy Tracking System."
-kudos to Paul Clark (retired) for starting this spreadsheet!!! =)
 
 Takes two TeleStaff downloads (Assignment Report + People CSV),
 joins and transforms them, and outputs TS EXP.xlsx ready to drop
-into SharePoint for the CRVTS Power Query.  Note to set instituition to none
+into SharePoint for the CRVTS Power Query.
 
-payroll id, file numb current = file number
+Requires: pip install pandas openpyxl requests
 """
 
 import re
@@ -31,11 +30,11 @@ except ImportError:
 
 OUTPUT_DIR = Path.home() / "Downloads"
 
-# XML namespace used in TeleStaff's .xls export (it's XML pretending to be Excel wth)
+# XML namespace used in TeleStaff's .xls export (it's XML pretending to be Excel)
 NS = {"ss": "urn:schemas-microsoft-com:office:spreadsheet"}
 
 
-# ── File Picker ──
+# ── File Picker ────────────────────────────────────────────────────────────────
 
 def pick_file(title, filetypes):
     """Pop a native file-open dialog and return the selected path (or empty string)."""
@@ -49,13 +48,13 @@ def pick_file(title, filetypes):
     return path
 
 
-# ── Assignment Report Parser ───
+# ── Assignment Report Parser ──────────────────────────────────────────────────
 #
 # The Assignment Report is exported from TeleStaff as an .xls file, but it's
-# actually XML. Each row has 12 cells. The first cell
+# actually XML (Microsoft SpreadsheetML). Each row has 12 cells. The first cell
 # ("Institution") uses MergeAcross=1 to span two visual columns, which is the
 # blank "column B" that the manual process tells you to delete. We just read
-# cells sequentially and ignore the merge-----both headers and data line up.
+# cells sequentially and ignore the merge — both headers and data line up.
 #
 
 def read_xml_row(row_el):
@@ -70,7 +69,8 @@ def read_xml_row(row_el):
 
 def parse_assignment_report(filepath):
     """Parse the TeleStaff Assignment Report XML into a DataFrame.
-    columns:
+
+    Returns a DataFrame with columns:
     Institution, Region, Station, Unit, Person, Employee ID, File,
     Shift, Daley, From, Rank
     """
@@ -85,7 +85,7 @@ def parse_assignment_report(filepath):
     table = worksheet[0].find("ss:Table", NS)
     all_rows = table.findall("ss:Row", NS)
 
-    # check rows until we find the header
+    # Walk rows until we find the header (starts with "Institution", "Region"...)
     header_idx = None
     headers = None
     for i, row in enumerate(all_rows):
@@ -115,14 +115,14 @@ def parse_assignment_report(filepath):
 
     df = pd.DataFrame(data_rows, columns=headers)
 
-    # "Rank (Qual)" column isn't used anywhere downstream, maybe for the future? deleete
+    # "Rank (Qual)" column isn't used anywhere downstream
     if "Rank (Qual)" in df.columns:
         df.drop(columns=["Rank (Qual)"], inplace=True)
 
     df = df[df["Person"].str.strip().astype(bool)].reset_index(drop=True)
     print(f"  Parsed {len(df)} records")
 
-    # check so we catch column misalignment early
+    # Quick sanity check so we catch column misalignment early
     if len(df) > 0:
         sample_person = df.iloc[0].get("Person", "")
         print(f"  Sanity check — first Person: {sample_person}")
@@ -132,23 +132,23 @@ def parse_assignment_report(filepath):
     return df
 
 
-# ── Column Derivation --
+# ── Column Derivation ─────────────────────────────────────────────────────────
 #
 # These columns are derived from existing data without any external calls:
 #   Name         = Person with the parenthetical stripped out
 #   TS Assignment= The text inside the parenthetical (unit/company code)
-#   PLT          = Daley value if present, else EMS platoon from shift name, else 5 (admin ppl)
+#   PLT          = Daley value if present, else EMS platoon from shift name, else 5
 #
 
 def extract_name(person):
-    """'Blow(515), Joe F.' → 'Blow, Joe F.'"""
+    """'GROSZEK(515), STEPHEN F.' → 'GROSZEK, STEPHEN F.'"""
     if not person:
         return ""
     return re.sub(r"\([^)]*\)", "", person).strip()
 
 
 def extract_assignment(person):
-    """'Blow(515), Joe F.' → '515'"""
+    """'GROSZEK(515), STEPHEN F.' → '515'"""
     if not person:
         return ""
     m = re.search(r"\(([^)]*)\)", person)
@@ -156,7 +156,7 @@ def extract_assignment(person):
 
 
 def compute_plt(daley, shift):
-    """PLT formula from the manual process (step 21 in old doc).
+    """Replicate the PLT formula from the manual process (step 21).
 
     Priority: use Daley if it exists, otherwise check the shift name
     for 'EMS Platoon N' and return 'EMSN', otherwise default to 5.
@@ -193,7 +193,7 @@ def idph_from_specialty(specialty_str):
     if not specialty_str or pd.isna(specialty_str):
         return "NONE"
     specs = [s.strip() for s in str(specialty_str).split(",")]
-    # EMTBP check first because .EMT is a substring of .EMTBP
+    # Order matters: EMTBP check first because .EMT is a substring of .EMTBP
     if ".EMTBP" in specs:
         return "EMT (PM Drop)"
     if ".EMTP" in specs:
@@ -217,18 +217,18 @@ def idph_from_name(name_str):
     return "NONE"
 
 
-# ── People CSV fix ───
+# ── People CSV Enrichment ─────────────────────────────────────────────────────
 #
 # The People CSV (exported via TeleStaff > People > gear > Export People CSV)
 # provides two things we can't get from the Assignment Report:
 #   - Promoted date (from the "Promoted" column)
 #   - IDPH license status (derived from "Specialty" and/or "Name" columns)
 #
-# We join on Payroll ID (People CSV) = File (Assignment Report).  --file numbers-----
+# We join on Payroll ID (People CSV) = File (Assignment Report).
 #
 
 def find_column(df, candidates):
-    """Find a column name case insensitively from a list of possible names."""
+    """Find a column name case-insensitively from a list of possible names."""
     for candidate in candidates:
         for col in df.columns:
             if col.lower().strip() == candidate.lower().strip():
@@ -270,7 +270,7 @@ def enrich_from_people(df_main, df_people):
     print(f"  Mapping columns: payroll={payroll_col}, promoted={promo_col}, "
           f"specialty={spec_col}, name={name_col}")
 
-    # Build lookup dictionary keyed by payroll ID string
+    # Build lookup dicts keyed by payroll ID string
     df_people["_pid"] = df_people[payroll_col].astype(str).str.strip()
     promo_lookup = {}
     idph_lookup = {}
@@ -288,7 +288,7 @@ def enrich_from_people(df_main, df_people):
             elif val:
                 promo_lookup[pid] = str(val)
 
-        
+        # IDPH: structured Specialty field first, name string as fallback
         status = "NONE"
         if spec_col:
             status = idph_from_specialty(row.get(spec_col, ""))
@@ -483,7 +483,7 @@ def main():
     df = parse_assignment_report(report_path)
     df = add_derived_columns(df)
 
-    # Step 3: People CSV for Promoted + medic license level
+    # Step 3: People CSV for Promoted + IDPH
     print("\n[Step 3] Select the People CSV export...")
     people_path = pick_file(
         "Select TeleStaff People Export (CSV or XLSX)",
@@ -498,8 +498,23 @@ def main():
         df["Promoted"] = ""
         df["IDPH Status"] = "NONE"
 
-    # Step 4: Write the workbook
-    output_path = OUTPUT_DIR / "TS_EXP.xlsx"
+    # Step 4: Choose save location and write the workbook
+    root = Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    output_path = filedialog.asksaveasfilename(
+        title="Save TS EXP workbook",
+        initialdir=str(OUTPUT_DIR),
+        initialfile="TS EXP.xlsx",
+        defaultextension=".xlsx",
+        filetypes=[("Excel workbook", "*.xlsx"), ("All files", "*.*")],
+    )
+    root.destroy()
+    if not output_path:
+        print("  Save cancelled.")
+        return
+    output_path = Path(output_path)
+
     write_workbook(df, df_people, output_path)
 
     # Step 5: Show summary
