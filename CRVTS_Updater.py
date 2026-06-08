@@ -112,13 +112,16 @@ def compute_plt(daley, shift):
     Priority: use Daley if it exists, otherwise check the shift name
     for 'EMS Platoon N' and return 'EMSN', otherwise default to 5.
     """
+    import pandas as pd
+    daley = "" if pd.isna(daley) else str(daley).strip()
+    shift = "" if pd.isna(shift) else str(shift).strip()
     if daley:
         return daley
     if shift:
         m = re.search(r"EMS\s+Platoon\s+(\d)", shift)
         if m:
             return f"EMS{m.group(1)}"
-    return 5
+    return "5"
 
 
 def add_derived_columns(df):
