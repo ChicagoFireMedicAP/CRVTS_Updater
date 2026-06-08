@@ -8,17 +8,11 @@ Takes two TeleStaff downloads (Assignment Report + People CSV),
 joins and transforms them, and outputs TS EXP.xlsx ready to drop
 into SharePoint for the CRVTS Power Query.
 
-Quick note to get these files, switch instituition to none, then go to reports, assignment report, download (with default options) Assignment Report (worksheet)
-switch instituition back to instituition, go to people (let it load exporting before load gives you empty csv) hit the gear button then export to csv (people.csv)
-
-Drop the TS EXP into the correct folder on sharepoint, then refresh data connections in the CRVTS file
-
-Requires: install pandas openpyxl requests
+Requires: pip install pandas openpyxl requests
 """
 
 import re
 import sys
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from tkinter import Tk, filedialog
@@ -29,14 +23,11 @@ try:
     from openpyxl.worksheet.table import Table, TableStyleInfo
     from openpyxl.utils import get_column_letter
 except ImportError:
-    print("Missing dependencies.  install pandas  and openpyxl")
+    print("Missing dependencies. Run:\n  pip install pandas openpyxl")
     sys.exit(1)
 
 
 OUTPUT_DIR = Path.home() / "Downloads"
-
-# XML namespace used in TeleStaff's .xls export (it's XML pretending to be Excel)
-NS = {"ss": "urn:schemas-microsoft-com:office:spreadsheet"}
 
 
 # ── File Picker ────────────────────────────────────────────────────────────────
@@ -55,83 +46,38 @@ def pick_file(title, filetypes):
 
 # ── Assignment Report Parser ──────────────────────────────────────────────────
 #
-# The Assignment Report is exported from TeleStaff as an .xls file, but it's
-# actually XML (Microsoft SpreadsheetML). Each row has 12 cells. The first cell
-# ("Institution") uses MergeAcross=1 to span two visual columns, which is the
-# blank "column B" that the manual process tells you to delete. We just read
-# cells sequentially and ignore the merge — both headers and data line up.
+# The Assignment Report is now a real .xlsx file (as of the TeleStaff migration).
+# Previously it was XML/SpreadsheetML disguised as .xls — that format is gone.
+# Row 0 is a junk row with non-person data; we filter it out by checking Person.
 #
 
-def read_xml_row(row_el):
-    """Read cells left-to-right, ignoring positional Index attributes."""
-    cells = row_el.findall("ss:Cell", NS)
-    return [
-        (data.text.strip() if data is not None and data.text else "")
-        for cell in cells
-        for data in [cell.find("ss:Data", NS)]
-    ]
-
-
 def parse_assignment_report(filepath):
-    """Parse the TeleStaff Assignment Report XML into a DataFrame.
+    """Parse the TeleStaff Assignment Report xlsx into a DataFrame.
 
     Returns a DataFrame with columns:
     Institution, Region, Station, Unit, Person, Employee ID, File,
     Shift, Daley, From, Rank
     """
     print(f"  Parsing: {Path(filepath).name}")
-    tree = ET.parse(filepath)
-    root = tree.getroot()
 
-    worksheet = root.findall(".//ss:Worksheet", NS)
-    if not worksheet:
-        raise ValueError("No worksheet found in file — is this the right export?")
+    df = pd.read_excel(filepath, header=0)
+    df.columns = [str(c).strip() for c in df.columns]
 
-    table = worksheet[0].find("ss:Table", NS)
-    all_rows = table.findall("ss:Row", NS)
-
-    # Walk rows until we find the header (starts with "Institution", "Region"...)
-    header_idx = None
-    headers = None
-    for i, row in enumerate(all_rows):
-        vals = read_xml_row(row)
-        if len(vals) >= 5 and vals[0] == "Institution" and vals[1] == "Region":
-            header_idx = i
-            headers = vals
-            break
-
-    if header_idx is None:
-        raise ValueError("Couldn't find header row — expected 'Institution, Region...'")
-
-    print(f"  Headers at row {header_idx + 1}: {headers}")
-
-    # Everything after the header is data (skip empty/junk rows at bottom)
-    person_col = headers.index("Person") if "Person" in headers else 4
-    data_rows = []
-    for row in all_rows[header_idx + 1:]:
-        vals = read_xml_row(row)
-        # Pad short rows, trim long ones
-        while len(vals) < len(headers):
-            vals.append("")
-        vals = vals[: len(headers)]
-        # Only keep rows that have an actual person name
-        if vals[person_col].strip():
-            data_rows.append(vals)
-
-    df = pd.DataFrame(data_rows, columns=headers)
+    # Drop junk rows — only keep rows with an actual person name
+    df = df[df["Person"].notna() & df["Person"].astype(str).str.strip().astype(bool)].reset_index(drop=True)
 
     # "Rank (Qual)" column isn't used anywhere downstream
     if "Rank (Qual)" in df.columns:
         df.drop(columns=["Rank (Qual)"], inplace=True)
 
-    df = df[df["Person"].str.strip().astype(bool)].reset_index(drop=True)
+    print(f"  Headers: {df.columns.tolist()}")
     print(f"  Parsed {len(df)} records")
 
     # Quick sanity check so we catch column misalignment early
     if len(df) > 0:
-        sample_person = df.iloc[0].get("Person", "")
+        sample_person = str(df.iloc[0]["Person"])
         print(f"  Sanity check — first Person: {sample_person}")
-        if "(" not in str(sample_person) and sample_person:
+        if "(" not in sample_person and sample_person:
             print("  ⚠ WARNING: Person column doesn't contain parenthetical — columns may be misaligned!")
 
     return df
@@ -477,7 +423,7 @@ def main():
     print("\n[Step 1] Select the Assignment Report file...")
     report_path = pick_file(
         "Select TeleStaff Assignment Report",
-        [("Excel/XML files", "*.xls *.xlsx *.xml"), ("All files", "*.*")],
+        [("Excel files", "*.xlsx"), ("All files", "*.*")],
     )
     if not report_path:
         print("  Cancelled.")
